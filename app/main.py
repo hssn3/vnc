@@ -25,7 +25,7 @@ import telegram_bot
 from core import RemoteLink
 from settings import app_dir, load_settings, save_settings, settings_path
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 
 # palette ---------------------------------------------------------------------
