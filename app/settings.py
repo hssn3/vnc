@@ -10,9 +10,12 @@ import os
 import sys
 import tempfile
 
-# پیش‌فرض کارخانه: ربات تلگرام از پیش تنظیم‌شده
-DEFAULT_BOT_TOKEN = "REDACTED"
-DEFAULT_CHAT_ID = "203439171"
+# پیش‌فرض کارخانه: از فایل محلی app/branding.py خوانده می‌شود (کامیت نمی‌شود).
+try:
+    from branding import DEFAULT_BOT_TOKEN, DEFAULT_CHAT_ID  # type: ignore
+except Exception:  # نسخهٔ عمومی: بدون توکن و بدون چت‌آی‌دی
+    DEFAULT_BOT_TOKEN = ""
+    DEFAULT_CHAT_ID = ""
 
 DEFAULTS = {
     "bot_token": DEFAULT_BOT_TOKEN,
