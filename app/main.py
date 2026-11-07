@@ -119,9 +119,10 @@ def run_selftest(password, ws_port, out_path, stop_path):
             def watch_stdin():
                 # only meaningful when a real stdin (pipe/console) is attached;
                 # a windowed build has sys.stdin = None and must not exit early.
+                if sys.stdin is None:
+                    return
                 try:
-                    if sys.stdin is not None:
-                        sys.stdin.read()
+                    sys.stdin.read()
                 except Exception:
                     return
                 stop.set()
