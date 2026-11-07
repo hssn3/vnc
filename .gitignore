@@ -5,3 +5,8 @@ build/
 *.spec.bak
 assets/cloudflared.exe
 .venv/
+settings.json
+settings.json.tmp
+gui*.png
+*.stop
+*.spec
