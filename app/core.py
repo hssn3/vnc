@@ -1,4 +1,16 @@
-"""Orchestration: TightVNC server + websockify/noVNC + Cloudflare quick tunnel."""
+"""Orchestration: TightVNC server + in-process websockify/noVNC + Cloudflare tunnel.
+
+Design notes (why it looks like this):
+
+* websockify runs as a **daemon thread inside this process** instead of a child
+  process.  In a one-file build a child process would unpack a second copy of
+  the whole application to %TEMP%; running it in-process is faster and, more
+  importantly, it cannot survive the app.
+* tvnserver.exe and cloudflared.exe are the only external processes.  Both are
+  assigned to a Windows Job Object with KILL_ON_JOB_CLOSE, so they are killed by
+  the OS even if the app is force-terminated.
+"""
+import ctypes
 import os
 import re
 import secrets
@@ -41,6 +53,9 @@ CLOUDFLARED_EXE = os.path.join(ASSETS, "cloudflared.exe")
 NOVNC_DIR = os.path.join(ASSETS, "novnc")
 
 
+# --------------------------------------------------------------------------- #
+# helpers
+# --------------------------------------------------------------------------- #
 def port_free(port):
     with socket.socket() as s:
         try:
@@ -66,6 +81,176 @@ def random_password(length=8):
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+class JobGuard:
+    """Keep every child process inside a job object that dies with us."""
+
+    _handle = None
+    _tried = False
+
+    @classmethod
+    def _ensure(cls):
+        if cls._tried:
+            return cls._handle
+        cls._tried = True
+        try:
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+            class IO_COUNTERS(ctypes.Structure):
+                _fields_ = [("ReadOperationCount", ctypes.c_ulonglong),
+                            ("WriteOperationCount", ctypes.c_ulonglong),
+                            ("OtherOperationCount", ctypes.c_ulonglong),
+                            ("ReadTransferCount", ctypes.c_ulonglong),
+                            ("WriteTransferCount", ctypes.c_ulonglong),
+                            ("OtherTransferCount", ctypes.c_ulonglong)]
+
+            class BASIC(ctypes.Structure):
+                _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                            ("PerJobUserTimeLimit", ctypes.c_int64),
+                            ("LimitFlags", ctypes.c_uint32),
+                            ("MinimumWorkingSetSize", ctypes.c_size_t),
+                            ("MaximumWorkingSetSize", ctypes.c_size_t),
+                            ("ActiveProcessLimit", ctypes.c_uint32),
+                            ("Affinity", ctypes.c_size_t),
+                            ("PriorityClass", ctypes.c_uint32),
+                            ("SchedulingClass", ctypes.c_uint32)]
+
+            class EXTENDED(ctypes.Structure):
+                _fields_ = [("BasicLimitInformation", BASIC),
+                            ("IoInfo", IO_COUNTERS),
+                            ("ProcessMemoryLimit", ctypes.c_size_t),
+                            ("JobMemoryLimit", ctypes.c_size_t),
+                            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                            ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+            job = k32.CreateJobObjectW(None, None)
+            if not job:
+                return None
+            info = EXTENDED()
+            info.BasicLimitInformation.LimitFlags = 0x00002000  # KILL_ON_JOB_CLOSE
+            if not k32.SetInformationJobObject(job, 9, ctypes.byref(info),
+                                               ctypes.sizeof(info)):
+                return None
+            cls._handle = job
+        except Exception:
+            cls._handle = None
+        return cls._handle
+
+    @classmethod
+    def assign(cls, proc):
+        try:
+            job = cls._ensure()
+            if not job or proc is None:
+                return False
+            k32 = ctypes.windll.kernel32
+            handle = k32.OpenProcess(0x1F0FFF, False, proc.pid)
+            if not handle:
+                return False
+            ok = k32.AssignProcessToJobObject(job, handle)
+            k32.CloseHandle(handle)
+            return bool(ok)
+        except Exception:
+            return False
+
+
+# --------------------------------------------------------------------------- #
+# in-process websockify
+# --------------------------------------------------------------------------- #
+_BRIDGE = {"started": False, "port": None}
+_BRIDGE_LOCK = threading.Lock()
+
+
+def _run_bridge(webroot, ws_port, vnc_port):
+    """websockify_init() blocks forever; it lives in a daemon thread."""
+    import signal
+    import websockify.websockifyserver as wss
+    import websockify.websocketproxy as wsp
+
+    # websockify spawns a multiprocessing.Process per connection; threads are
+    # far more reliable on Windows. The listener closes its copy of the socket
+    # right after "spawn", so every handler needs its own duplicated handle.
+    class _ThreadProcess:
+        _children = []
+
+        def __init__(self, target=None, args=()):
+            self._socks = []
+            dup_args = []
+            for arg in args:
+                if isinstance(arg, socket.socket):
+                    dup = arg.dup()
+                    self._socks.append(dup)
+                    dup_args.append(dup)
+                else:
+                    dup_args.append(arg)
+
+            def runner():
+                try:
+                    target(*dup_args)
+                finally:
+                    for sock in self._socks:
+                        try:
+                            sock.close()
+                        except OSError:
+                            pass
+
+            self._thread = threading.Thread(target=runner, daemon=True)
+            self.pid = id(self)
+
+        def start(self):
+            self._thread.start()
+            _ThreadProcess._children.append(self)
+
+        def terminate(self):
+            pass
+
+    class _MPShim:
+        Process = _ThreadProcess
+
+        @staticmethod
+        def active_children():
+            _ThreadProcess._children = [c for c in _ThreadProcess._children
+                                       if c._thread.is_alive()]
+            return _ThreadProcess._children
+
+    wss.multiprocessing = _MPShim
+
+    # start_server() installs SIGINT/SIGTERM handlers, which is illegal outside
+    # the main thread; swallow only that error and keep everything else intact.
+    real_signal = signal.signal
+
+    def safe_signal(sig, handler):
+        try:
+            return real_signal(sig, handler)
+        except (ValueError, OSError):
+            return None
+
+    signal.signal = safe_signal
+    sys.argv = ["websockify", "--web", webroot,
+                "127.0.0.1:%d" % ws_port, "127.0.0.1:%d" % vnc_port]
+    try:
+        wsp.websockify_init()
+    except SystemExit:
+        pass
+    except Exception:  # pragma: no cover - only on shutdown races
+        pass
+
+
+def ensure_bridge(webroot, ws_port, vnc_port, log=print):
+    with _BRIDGE_LOCK:
+        if _BRIDGE["started"] and _BRIDGE["port"] == ws_port:
+            return True
+        threading.Thread(target=_run_bridge, args=(webroot, ws_port, vnc_port),
+                         daemon=True, name="websockify").start()
+        if not wait_port(ws_port, timeout=20):
+            raise RuntimeError("پل وب‌سوکت (noVNC) روی پورت %d بالا نیامد." % ws_port)
+        _BRIDGE["started"] = True
+        _BRIDGE["port"] = ws_port
+        log("noVNC روی پورت %d آماده است." % ws_port)
+        return True
+
+
+# --------------------------------------------------------------------------- #
+# main controller
+# --------------------------------------------------------------------------- #
 class RemoteLink:
     def __init__(self, log=print):
         self.log = log
@@ -73,7 +258,6 @@ class RemoteLink:
         self.password = ""
         self.auto_password = False
         self._tvn = None
-        self._ws = None
         self._cf = None
         self._reg_snapshot = None
         self._lock = threading.Lock()
@@ -140,7 +324,7 @@ class RemoteLink:
     # ---------- lifecycle ----------
     def start(self, password, ws_port=6080):
         with self._lock:
-            if self._tvn or self._ws or self._cf:
+            if self._tvn or self._cf:
                 raise RuntimeError("در حال حاضر یک لینک فعال است؛ اول آن را متوقف کنید.")
             password = (password or "").strip()
             if password and (len(password) > 8 or not all(33 <= ord(c) <= 126 for c in password)):
@@ -153,12 +337,13 @@ class RemoteLink:
                 password = random_password()
                 self.log("بدون رمز درخواست شد: یک کلید تصادفی ساخته و داخل لینک قرار گرفت.")
             self.password = password
+
             for exe in (TVN_EXE, CLOUDFLARED_EXE):
                 if not os.path.isfile(exe):
                     raise FileNotFoundError(f"فایل لازم پیدا نشد: {exe}")
             if not port_free(VNC_PORT):
                 raise RuntimeError(f"پورت {VNC_PORT} اشغال است؛ یک سرور VNC دیگر در حال اجراست.")
-            if not port_free(ws_port):
+            if not _BRIDGE["started"] and not port_free(ws_port):
                 raise RuntimeError(f"پورت {ws_port} اشغال است.")
 
             try:
@@ -167,19 +352,12 @@ class RemoteLink:
                 self.log("تنظیمات سرور VNC اعمال شد.")
 
                 self._tvn = subprocess.Popen([TVN_EXE, "-run"], creationflags=CREATE_NO_WINDOW)
+                JobGuard.assign(self._tvn)
                 if not wait_port(VNC_PORT):
                     raise RuntimeError("سرور VNC روی پورت 5900 بالا نیامد.")
                 self.log("سرور VNC روی پورت 5900 آماده است.")
 
-                self._ws = subprocess.Popen(
-                    self._websockify_cmd(ws_port),
-                    creationflags=CREATE_NO_WINDOW,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                if not wait_port(ws_port):
-                    raise RuntimeError("پل وب‌سوکت (noVNC) بالا نیامد.")
-                self.log("noVNC روی پورت %s آماده است." % ws_port)
+                ensure_bridge(NOVNC_DIR, ws_port, VNC_PORT, log=self.log)
 
                 self._cf = subprocess.Popen(
                     [CLOUDFLARED_EXE, "tunnel", "--url", f"http://127.0.0.1:{ws_port}",
@@ -188,6 +366,7 @@ class RemoteLink:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                 )
+                JobGuard.assign(self._cf)
                 self.log("در حال ساخت تونل Cloudflare ...")
                 url = self._wait_tunnel_url(timeout=60)
                 if not url:
@@ -203,12 +382,6 @@ class RemoteLink:
                 self._teardown()
                 raise
 
-    def _websockify_cmd(self, ws_port):
-        args = ["--run-websockify", NOVNC_DIR, str(ws_port), str(VNC_PORT)]
-        if getattr(sys, "frozen", False):
-            return [sys.executable] + args
-        return [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), "main.py")] + args
-
     def _wait_tunnel_url(self, timeout):
         found = threading.Event()
         box = {}
@@ -216,9 +389,9 @@ class RemoteLink:
         def reader():
             for raw in self._cf.stderr:
                 line = raw.decode("utf-8", "replace").strip()
-                m = URL_RE.search(line)
-                if m and "url" not in box:
-                    box["url"] = m.group(0)
+                match = URL_RE.search(line)
+                if match and "url" not in box:
+                    box["url"] = match.group(0)
                     found.set()
 
         t = threading.Thread(target=reader, daemon=True)
@@ -230,10 +403,10 @@ class RemoteLink:
     def stop(self):
         with self._lock:
             self._teardown()
-            self.log("همه سرویس‌ها متوقف شدند.")
+            self.log("سرور VNC و تونل متوقف شدند (لینک بسته شد).")
 
     def _teardown(self):
-        for proc in (self._cf, self._ws, self._tvn):
+        for proc in (self._cf, self._tvn):
             if proc is not None:
                 try:
                     proc.terminate()
@@ -243,7 +416,7 @@ class RemoteLink:
                         proc.kill()
                     except Exception:
                         pass
-        self._cf = self._ws = self._tvn = None
+        self._cf = self._tvn = None
         self.url = None
         self._restore_registry()
 

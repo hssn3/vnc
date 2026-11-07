@@ -54,66 +54,6 @@ FONT_TITLE = ("Segoe UI Semibold", 13)
 # --------------------------------------------------------------------------- #
 # child-process entry points
 # --------------------------------------------------------------------------- #
-def run_websockify():
-    # args: --run-websockify <webroot> <listen_port> <target_port>
-    webroot, listen_port, target_port = sys.argv[2:5]
-    sys.argv = ["websockify", "--web", webroot,
-                f"127.0.0.1:{listen_port}", f"127.0.0.1:{target_port}"]
-
-    # websockify spawns a multiprocessing.Process per connection; on Windows
-    # (and inside a frozen exe) spawn is unreliable, so run handlers as threads.
-    # The listener closes its socket copy right after "spawn", so each thread
-    # needs a duplicated socket handle of its own.
-    import socket as _socket
-    import websockify.websockifyserver as wss
-
-    class _ThreadProcess:
-        _children = []
-
-        def __init__(self, target=None, args=()):
-            self._socks = []
-            dup_args = []
-            for a in args:
-                if isinstance(a, _socket.socket):
-                    d = a.dup()
-                    self._socks.append(d)
-                    dup_args.append(d)
-                else:
-                    dup_args.append(a)
-
-            def runner():
-                try:
-                    target(*dup_args)
-                finally:
-                    for s in self._socks:
-                        try:
-                            s.close()
-                        except OSError:
-                            pass
-
-            self._thread = threading.Thread(target=runner, daemon=True)
-            self.pid = id(self)
-
-        def start(self):
-            self._thread.start()
-            _ThreadProcess._children.append(self)
-
-        def terminate(self):
-            pass
-
-    class _MPShim:
-        Process = _ThreadProcess
-
-        @staticmethod
-        def active_children():
-            _ThreadProcess._children = [c for c in _ThreadProcess._children if c._thread.is_alive()]
-            return _ThreadProcess._children
-
-    wss.multiprocessing = _MPShim
-    import websockify.websocketproxy
-    websockify.websocketproxy.websockify_init()
-
-
 def _arg(name, default=None):
     if name in sys.argv:
         i = sys.argv.index(name)
@@ -885,9 +825,6 @@ def main():
             stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
-    if "--run-websockify" in sys.argv:
-        run_websockify()
-        return
     if "--selftest" in sys.argv:
         port = int(_arg("--selftest-port", "6080"))
         run_selftest(_arg("--selftest") or "", port, _arg("--out"), _arg("--stop-file"))
