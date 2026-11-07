@@ -5,6 +5,7 @@ TightVNC) lives inside the application folder instead of being unpacked into
 %TEMP% on every start.
 """
 import os
+import shutil
 import subprocess
 import sys
 
@@ -28,6 +29,16 @@ def main():
     cmd.append(os.path.join(ROOT, "app", "main.py"))
     subprocess.run(cmd, check=True, cwd=ROOT)
     exe = os.path.join(ROOT, "dist", NAME, NAME + ".exe")
+
+    # ship the one-click launcher (self-repair + start) inside the app folder
+    launcher = os.path.join(ROOT, "launcher")
+    if os.path.isdir(launcher):
+        for item in os.listdir(launcher):
+            src = os.path.join(launcher, item)
+            if os.path.isfile(src):
+                shutil.copy2(src, os.path.join(ROOT, "dist", NAME, item))
+        print("launcher copied")
+
     total = sum(os.path.getsize(os.path.join(d, f))
                 for d, _, files in os.walk(os.path.join(ROOT, "dist", NAME))
                 for f in files)
