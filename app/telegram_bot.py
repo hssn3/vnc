@@ -10,7 +10,7 @@ import urllib.parse
 import urllib.request
 
 API_ROOT = "https://api.telegram.org/bot{token}/{method}"
-USER_AGENT = "VNC-Link/1.3 (+https://github.com/atomich000w/vnc-link)"
+USER_AGENT = "VNC-Link/1.3 (+https://github.com/hssn3/vnc)"
 TOKEN_RE = re.compile(r"^\d{5,}:([A-Za-z0-9_-]{30,})$")
 _JUNK_RE = re.compile(r"[\s\u200b\u200c\u200d\u00a0\ufeff]+")
 

@@ -23,7 +23,7 @@ $app    = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvo
 $exe    = Join-Path $app 'VNC-Link.exe'
 $assets = Join-Path $app '_internal\assets'
 $version = '1.2.0'
-$zipUrl = "https://github.com/atomich000w/vnc-link/releases/download/v$version/VNC-Link-$version-portable.zip"
+$zipUrl = "https://github.com/hssn3/vnc/releases/download/v$version/VNC-Link-$version-portable.zip"
 
 function Line($text, $color = 'Gray') { Write-Host $text -ForegroundColor $color }
 function Step($text) { Line "   ... $text" 'DarkGray' }
