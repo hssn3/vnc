@@ -73,7 +73,9 @@ def _call(token, method, payload=None, timeout=25):
         if code == 400 and "chat not found" in desc.lower():
             raise TelegramError("چت آی‌دی پیدا نشد (400). یک بار در ربات /start بزنید.")
         if code == 409:
-            raise TelegramError("تداخل در دریافت پیام‌ها (409). چند لحظه بعد دوباره تلاش کنید.")
+            raise TelegramError(
+                "این ربات روی یک Webhook فعال است؛ دریافت خودکار پیام‌ها ممکن نیست. "
+                "چت‌آی‌دی را دستی وارد کنید (پیش‌فرض تنظیم است).")
         if code == 429:
             raise TelegramError("محدودیت نرخ تلگرام (429). کمی بعد دوباره تلاش کنید.")
         raise TelegramError("خطای تلگرام %s: %s" % (code, desc))
