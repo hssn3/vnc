@@ -25,7 +25,7 @@ import telegram_bot
 from core import RemoteLink
 from settings import app_dir, load_settings, save_settings, settings_path
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 
 # palette ---------------------------------------------------------------------
@@ -165,6 +165,25 @@ def enable(btn, on=True):
         btn.configure(bg=SOFT, fg="#94a3b8", cursor="arrow")
 
 
+def add_entry_menu(entry):
+    """Right-click menu: most users paste with the mouse, plain tk has none."""
+    menu = tk.Menu(entry, tearoff=0, bg=CARD, fg=TEXT, activebackground=SOFT,
+                   activeforeground=TEXT, bd=0)
+    menu.add_command(label="چسباندن  (Ctrl+V)", command=lambda: entry.event_generate("<<Paste>>"))
+    menu.add_command(label="کپی", command=lambda: entry.event_generate("<<Copy>>"))
+    menu.add_command(label="برش", command=lambda: entry.event_generate("<<Cut>>"))
+    menu.add_separator()
+
+    def select_all():
+        entry.select_range(0, "end")
+        return "break"
+
+    menu.add_command(label="انتخاب همه", command=select_all)
+    entry.bind("<Button-3>", lambda e: menu.tk_popup(e.x_root, e.y_root))
+    entry.bind("<Control-a>", lambda e: select_all())
+    return menu
+
+
 def mk_entry(parent, var, show=None, width=None):
     ent = tk.Entry(parent, textvariable=var, bg="#f8fafc", fg=TEXT, relief="flat",
                    highlightthickness=1, highlightbackground=BORDER, highlightcolor=ACCENT,
@@ -174,6 +193,7 @@ def mk_entry(parent, var, show=None, width=None):
         ent.configure(show=show)
     if width:
         ent.configure(width=width)
+    add_entry_menu(ent)
     return ent
 
 
@@ -231,6 +251,13 @@ class App:
         self._refresh_history()
         self._log(f"VNC Link {VERSION} — آماده.")
         self._log("پوشهٔ داده: " + app_dir())
+        if self.cfg.get("bot_token"):
+            if self.cfg.get("chat_id"):
+                text = "توکن و چت‌آی‌دی آماده است — برای اطمینان «تست اتصال» را بزنید."
+            else:
+                text = ("توکن ربات از پیش تنظیم شده؛ در ربات /start بزنید و بعد "
+                        "«دریافت خودکار» را بزنید.")
+            self.tg_state.configure(text=text, fg=MUTED)
 
     # ---------------- header ----------------
     def _build_header(self):
@@ -314,6 +341,8 @@ class App:
         self.token_entry = mk_entry(r1, self.token_var, show="•")
         self.token_entry.pack(side="right", fill="x", expand=True, padx=8, ipady=4)
         mk_button(r1, "نمایش", lambda: self._toggle(self.token_entry, "•"), "ghost").pack(side="right")
+        mk_button(r1, "چسباندن", lambda: self._paste_into(self.token_entry), "ghost")\
+            .pack(side="right", padx=2)
 
         r2 = tk.Frame(box, bg=CARD)
         r2.pack(fill="x", padx=14, pady=(8, 0))
@@ -440,6 +469,16 @@ class App:
     def _toggle(self, widget, mask):
         widget.configure(show="" if widget.cget("show") else mask)
 
+    def _paste_into(self, entry):
+        try:
+            text = self.root.clipboard_get()
+        except tk.TclError:
+            return
+        entry.delete(0, "end")
+        entry.insert(0, text.strip())
+        entry.icursor("end")
+        entry.focus_set()
+
     def _gen_password(self):
         self.pw_var.set("".join(random.choice(PASSWORD_ALPHABET) for _ in range(8)))
 
@@ -465,7 +504,7 @@ class App:
 
     def _collect(self):
         return {
-            "bot_token": self.token_var.get().strip(),
+            "bot_token": telegram_bot.clean_token(self.token_var.get()),
             "chat_id": self.chat_var.get().strip(),
             "auto_send": bool(self.auto_var.get()),
             "remember_password": bool(self.remember_var.get()),

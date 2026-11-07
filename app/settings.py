@@ -10,8 +10,11 @@ import os
 import sys
 import tempfile
 
+# پیش‌فرض کارخانه: ربات تلگرام از پیش تنظیم‌شده
+DEFAULT_BOT_TOKEN = "REDACTED"
+
 DEFAULTS = {
-    "bot_token": "",
+    "bot_token": DEFAULT_BOT_TOKEN,
     "chat_id": "",
     "auto_send": True,
     "remember_password": True,
@@ -57,6 +60,9 @@ def load_settings():
         for key in DEFAULTS:
             if key in saved:
                 data[key] = saved[key]
+    if not data.get("bot_token"):
+        # keep the built-in bot even if the field was cleared
+        data["bot_token"] = DEFAULT_BOT_TOKEN
     return data
 
 

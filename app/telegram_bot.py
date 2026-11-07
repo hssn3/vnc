@@ -4,12 +4,23 @@ Only three endpoints are used: getMe (token check), getUpdates (auto-discover
 the chat id) and sendMessage (deliver the link + password).
 """
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
 
 API_ROOT = "https://api.telegram.org/bot{token}/{method}"
-USER_AGENT = "VNC-Link/1.1 (+https://github.com/atomich000w/vnc-link)"
+USER_AGENT = "VNC-Link/1.3 (+https://github.com/atomich000w/vnc-link)"
+TOKEN_RE = re.compile(r"^\d{5,}:([A-Za-z0-9_-]{30,})$")
+_JUNK_RE = re.compile(r"[\s\u200b\u200c\u200d\u00a0\ufeff]+")
+
+
+def clean_token(value):
+    """Strip spaces / zero-width characters / a leading "bot" keyword."""
+    token = _JUNK_RE.sub("", value or "")
+    if token.lower().startswith("bot") and ":" in token:
+        token = token[3:]
+    return token
 
 
 class TelegramError(Exception):
@@ -41,10 +52,10 @@ def _http(url, payload=None, timeout=25):
 
 
 def _call(token, method, payload=None, timeout=25):
-    token = (token or "").strip()
+    token = clean_token(token)
     if not token:
         raise TelegramError("توکن ربات وارد نشده است.")
-    if ":" not in token or len(token) < 20:
+    if not TOKEN_RE.match(token):
         raise TelegramError("قالب توکن ربات درست نیست (مثال: 123456789:AA...).")
     url = API_ROOT.format(token=token, method=method)
     result = _http(url, payload, timeout=timeout)
