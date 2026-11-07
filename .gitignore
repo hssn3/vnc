@@ -15,3 +15,6 @@ ui*.png
 view*.png
 *.stop
 demo2.out
+err.txt
+out.txt
+
