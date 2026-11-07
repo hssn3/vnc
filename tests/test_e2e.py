@@ -60,17 +60,24 @@ def rfb_session(host, password, expect_ok):
         n = rd.read(1)[0]
         assert n > 0, "server offered no security types"
         types = list(rd.read(n))
-        assert 2 in types, types
         print("   security types offered:", types)
-        ws.send_binary(b"\x02")
-        challenge = rd.read(16)
-        ws.send_binary(challenge_response(challenge, password))
-        result = struct.unpack(">I", rd.read(4))[0]
-        if not expect_ok:
-            assert result != 0, "wrong password was accepted!"
-            print("   wrong password correctly rejected")
-            return
-        assert result == 0, f"auth failed with correct password (result={result})"
+        if password:
+            assert 2 in types, types
+            ws.send_binary(b"\x02")
+            challenge = rd.read(16)
+            ws.send_binary(challenge_response(challenge, password))
+            result = struct.unpack(">I", rd.read(4))[0]
+            if not expect_ok:
+                assert result != 0, "wrong password was accepted!"
+                print("   wrong password correctly rejected")
+                return
+            assert result == 0, f"auth failed with correct password (result={result})"
+        else:
+            # no password configured: the server must offer "None" (1) and
+            # RFB 3.8 continues straight to ClientInit (no SecurityResult).
+            assert 1 in types, f"no-auth mode not offered: {types}"
+            ws.send_binary(b"\x01")
+            print("   connected without a password (None auth)")
         ws.send_binary(b"\x01")
         hdr = rd.read(24)
         w, h = struct.unpack(">HH", hdr[:4])
@@ -155,12 +162,26 @@ def main():
         print("target: frozen exe", exe)
     else:
         print("target: source app")
+    if "--nopass" in sys.argv:
+        global PASSWORD
+        PASSWORD = ""
+        print("mode: link WITHOUT a password")
 
     proc, get_link, do_stop = start_app(exe)
     try:
         url = get_link()
         host = re.match(r"https://([^/]+)", url).group(1)
         print("\n[1] public URL:", url)
+
+        # "no password" mode embeds a generated key in the link itself, so the
+        # viewer can connect without asking anything.
+        import urllib.parse
+        m = re.search(r"[?&]password=([^&]+)", url)
+        url_password = urllib.parse.unquote(m.group(1)) if m else ""
+        if "--nopass" in sys.argv:
+            assert url_password, "password-less link must carry its generated key"
+            print("    link carries its own key:", url_password)
+        password = url_password if "--nopass" in sys.argv else PASSWORD
 
         print("[2] fetching noVNC page through the tunnel ...")
         body = None
@@ -172,12 +193,12 @@ def main():
             except Exception as exc:
                 print(f"  attempt {attempt+1}: {exc}; waiting for DNS ...")
                 time.sleep(5)
-        assert body, "could not fetch noVNC page through the tunnel"
-        assert "noVNC" in body, "page is not noVNC"
-        print("  noVNC page served correctly (%d bytes)" % len(body))
+        assert body, "could not fetch the viewer page through the tunnel"
+        assert "core/rfb.js" in body and "VNC Link" in body, "page is not the VNC Link viewer"
+        print("  viewer page served correctly (%d bytes)" % len(body))
 
-        print("[3] RFB session with CORRECT password through the tunnel ...")
-        rfb_session(host, PASSWORD, expect_ok=True)
+        print("[3] RFB session with the correct credentials through the tunnel ...")
+        rfb_session(host, password, expect_ok=True)
 
         print("[4] RFB session with WRONG password through the tunnel ...")
         rfb_session(host, "Wrong999", expect_ok=False)

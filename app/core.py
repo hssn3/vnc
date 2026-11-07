@@ -1,11 +1,13 @@
 """Orchestration: TightVNC server + websockify/noVNC + Cloudflare quick tunnel."""
 import os
 import re
+import secrets
 import socket
 import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import winreg
 
 from vncrypt import encrypt_password
@@ -59,10 +61,17 @@ def wait_port(port, timeout=15):
     return False
 
 
+def random_password(length=8):
+    alphabet = "abcdefghijkmnpqrstuvwxyz23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
 class RemoteLink:
     def __init__(self, log=print):
         self.log = log
         self.url = None
+        self.password = ""
+        self.auto_password = False
         self._tvn = None
         self._ws = None
         self._cf = None
@@ -93,7 +102,17 @@ class RemoteLink:
         try:
             for name, (typ, val) in MANAGED_SETTINGS.items():
                 winreg.SetValueEx(key, name, 0, typ, val)
-            winreg.SetValueEx(key, "Password", 0, winreg.REG_BINARY, encrypt_password(password))
+            if password:
+                winreg.SetValueEx(key, "UseVncAuthentication", 0, winreg.REG_DWORD, 1)
+                winreg.SetValueEx(key, "Password", 0, winreg.REG_BINARY,
+                                  encrypt_password(password))
+            else:
+                # no password requested: let clients in without authentication
+                winreg.SetValueEx(key, "UseVncAuthentication", 0, winreg.REG_DWORD, 0)
+                try:
+                    winreg.DeleteValue(key, "Password")
+                except FileNotFoundError:
+                    pass
         finally:
             winreg.CloseKey(key)
 
@@ -123,8 +142,17 @@ class RemoteLink:
         with self._lock:
             if self._tvn or self._ws or self._cf:
                 raise RuntimeError("در حال حاضر یک لینک فعال است؛ اول آن را متوقف کنید.")
-            if not password or len(password) > 8 or not all(32 < ord(c) < 127 for c in password):
+            password = (password or "").strip()
+            if password and (len(password) > 8 or not all(33 <= ord(c) <= 126 for c in password)):
                 raise ValueError("رمز عبور باید ۱ تا ۸ کاراکتر انگلیسی/عدد باشد (محدودیت پروتکل VNC).")
+            self.auto_password = not password
+            if self.auto_password:
+                # TightVNC's "None" security type trips up standard clients, so
+                # instead we generate a random key and put it inside the link:
+                # the viewer connects without asking, the wire format stays standard.
+                password = random_password()
+                self.log("بدون رمز درخواست شد: یک کلید تصادفی ساخته و داخل لینک قرار گرفت.")
+            self.password = password
             for exe in (TVN_EXE, CLOUDFLARED_EXE):
                 if not os.path.isfile(exe):
                     raise FileNotFoundError(f"فایل لازم پیدا نشد: {exe}")
@@ -164,7 +192,11 @@ class RemoteLink:
                 url = self._wait_tunnel_url(timeout=60)
                 if not url:
                     raise RuntimeError("تونل Cloudflare ساخته نشد (اینترنت را بررسی کنید).")
-                self.url = url + "/vnc.html?autoconnect=true&resize=remote&reconnect=true&reconnect_delay=2000"
+                # index.html is our own full-screen viewer that fits the remote
+                # desktop to the browser window (slightly zoomed out).
+                self.url = url + "/"
+                if self.auto_password:
+                    self.url += "?password=" + urllib.parse.quote(password)
                 self.log("لینک آماده شد.")
                 return self.url
             except Exception:

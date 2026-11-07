@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#070b14">
+<title>VNC Link — دسکتاپ راه دور</title>
+<style>
+  :root{
+    --glass: rgba(255,255,255,.07);
+    --glass-strong: rgba(255,255,255,.12);
+    --stroke: rgba(255,255,255,.16);
+    --stroke-soft: rgba(255,255,255,.08);
+    --txt: #eef4ff;
+    --muted: #9fb0c9;
+    --accent: #4f8cff;
+    --accent-2: #7c5cff;
+    --ok: #34d399;
+    --bad: #f87171;
+    --warn: #fbbf24;
+    --r: 20px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:#070b14;color:var(--txt);overflow:hidden;
+    font-family:"Segoe UI",Tahoma,"Iranian Sans",sans-serif;font-size:16px;-webkit-font-smoothing:antialiased}
+
+  /* ---------- animated background ---------- */
+  .bg{position:fixed;inset:0;z-index:0;overflow:hidden;background:
+      radial-gradient(1200px 800px at 80% -10%, #16233f 0%, transparent 60%),
+      radial-gradient(900px 700px at -10% 110%, #1b1740 0%, transparent 60%),
+      linear-gradient(160deg,#070b14 0%,#0a1020 55%,#070a12 100%)}
+  .blob{position:absolute;border-radius:50%;filter:blur(70px);opacity:.55;will-change:transform}
+  .b1{width:46vw;height:46vw;left:-8vw;top:-10vw;background:radial-gradient(circle at 30% 30%,#3b6bff,transparent 65%);animation:float1 22s ease-in-out infinite}
+  .b2{width:40vw;height:40vw;right:-6vw;top:8vh;background:radial-gradient(circle at 60% 40%,#8b5cf6,transparent 65%);animation:float2 26s ease-in-out infinite}
+  .b3{width:38vw;height:38vw;left:30vw;bottom:-14vw;background:radial-gradient(circle at 50% 50%,#0ea5e9,transparent 65%);animation:float3 30s ease-in-out infinite}
+  @keyframes float1{50%{transform:translate3d(6vw,4vh,0) scale(1.08)}}
+  @keyframes float2{50%{transform:translate3d(-5vw,6vh,0) scale(.94)}}
+  @keyframes float3{50%{transform:translate3d(4vw,-5vh,0) scale(1.06)}}
+  .grain{position:absolute;inset:0;opacity:.05;background-image:
+      repeating-linear-gradient(0deg,rgba(255,255,255,.5) 0 1px,transparent 1px 3px);
+      mix-blend-mode:overlay}
+
+  /* ---------- desktop stage (slightly zoomed out) ---------- */
+  #stage{position:fixed;inset:3.2vh 3.2vw;z-index:5;border-radius:18px;overflow:hidden;
+    opacity:0;transform:scale(.985);transition:opacity .7s ease, transform .7s cubic-bezier(.22,1,.36,1)}
+  #stage.ready{opacity:1;transform:scale(1)}
+  #screen{position:absolute;inset:0;background:transparent}
+  #screen canvas{display:block;border-radius:14px;
+    box-shadow:0 30px 90px rgba(0,0,0,.65), 0 0 0 1px rgba(255,255,255,.07)}
+
+  /* ---------- glass toolbar ---------- */
+  #bar{position:fixed;top:14px;left:50%;transform:translate(-50%,-160%);z-index:40;
+    display:flex;align-items:center;gap:12px;padding:10px 16px;border-radius:16px;
+    background:var(--glass);border:1px solid var(--stroke);backdrop-filter:blur(22px) saturate(160%);
+    -webkit-backdrop-filter:blur(22px) saturate(160%);
+    box-shadow:0 18px 50px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.22);
+    transition:transform .45s cubic-bezier(.22,1,.36,1), background .3s, opacity .3s;font-size:15px}
+  body:hover #bar, #bar:hover, #bar:focus-within, body.pinned #bar{transform:translate(-50%,0)}
+  #dot{width:10px;height:10px;border-radius:50%;background:var(--muted);position:relative;flex:0 0 auto}
+  #dot::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:1px solid currentColor;opacity:.0}
+  #dot.ok{background:var(--ok);color:var(--ok);box-shadow:0 0 14px var(--ok)}
+  #dot.ok::after{animation:pulse 2.2s ease-out infinite}
+  #dot.bad{background:var(--bad);color:var(--bad);box-shadow:0 0 14px var(--bad)}
+  #dot.warn{background:var(--warn);color:var(--warn)}
+  @keyframes pulse{0%{opacity:.55;transform:scale(.6)}70%{opacity:0;transform:scale(1.7)}100%{opacity:0}}
+  #status{max-width:46vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+  .sep{width:1px;height:22px;background:var(--stroke-soft)}
+  .btn{background:rgba(255,255,255,.06);color:var(--txt);border:1px solid var(--stroke-soft);
+    border-radius:12px;padding:8px 14px;font-size:15px;font-family:inherit;cursor:pointer;
+    transition:transform .18s ease, background .2s, border-color .2s, box-shadow .2s}
+  .btn:hover{background:rgba(255,255,255,.12);border-color:var(--stroke);transform:translateY(-1px);
+    box-shadow:0 8px 22px rgba(0,0,0,.35)}
+  .btn:active{transform:translateY(0) scale(.98)}
+  .btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));border-color:transparent;
+    box-shadow:0 10px 26px rgba(79,140,255,.35)}
+  .btn.primary:hover{box-shadow:0 14px 34px rgba(79,140,255,.5)}
+
+  /* ---------- overlay ---------- */
+  #overlay{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:24px;
+    background:radial-gradient(1200px 700px at 50% 40%, rgba(12,18,32,.55), rgba(5,8,14,.88));
+    backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    opacity:0;pointer-events:none;transition:opacity .45s ease}
+  #overlay.show{opacity:1;pointer-events:auto}
+
+  .panel{width:min(520px,92vw);padding:38px 34px 32px;border-radius:26px;text-align:center;
+    background:linear-gradient(180deg, rgba(255,255,255,.11), rgba(255,255,255,.04));
+    border:1px solid var(--stroke);backdrop-filter:blur(28px) saturate(170%);
+    -webkit-backdrop-filter:blur(28px) saturate(170%);
+    box-shadow:0 40px 120px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.28);
+    transform:translateY(14px) scale(.97);opacity:0;
+    transition:transform .55s cubic-bezier(.22,1,.36,1), opacity .45s ease;position:relative;overflow:hidden}
+  #overlay.show .panel{transform:translateY(0) scale(1);opacity:1}
+  .panel::before{content:"";position:absolute;inset:-40% -20% auto;height:180px;
+    background:conic-gradient(from 0deg, transparent, rgba(124,92,255,.35), transparent 60%);
+    animation:sheen 6s linear infinite;pointer-events:none}
+  @keyframes sheen{to{transform:rotate(360deg)}}
+
+  .logo{width:64px;height:64px;margin:0 auto 18px;border-radius:20px;display:grid;place-items:center;
+    font-weight:800;font-size:19px;letter-spacing:.5px;
+    background:linear-gradient(135deg,var(--accent),var(--accent-2));
+    box-shadow:0 16px 40px rgba(79,140,255,.45), inset 0 1px 0 rgba(255,255,255,.5);
+    animation:breathe 3.4s ease-in-out infinite}
+  @keyframes breathe{50%{transform:translateY(-4px) scale(1.03);box-shadow:0 22px 52px rgba(124,92,255,.55)}}
+
+  h1{margin:0 0 10px;font-size:26px;font-weight:700;letter-spacing:.2px}
+  #msg{margin:0 auto 22px;max-width:40ch;font-size:16px;line-height:1.9;color:var(--muted)}
+
+  .field{position:relative;margin:0 auto 16px;max-width:340px}
+  #pw{width:100%;padding:16px 18px;border-radius:14px;font-size:19px;letter-spacing:6px;
+    text-align:center;color:var(--txt);background:rgba(8,12,22,.55);
+    border:1px solid var(--stroke);outline:none;font-family:inherit;
+    transition:border-color .25s, box-shadow .25s, background .25s}
+  #pw::placeholder{letter-spacing:0;font-size:15px;color:#7d8ca6}
+  #pw:focus{border-color:var(--accent);background:rgba(8,12,22,.75);
+    box-shadow:0 0 0 4px rgba(79,140,255,.18)}
+  #go{width:min(340px,100%);padding:15px;border:0;border-radius:14px;cursor:pointer;
+    font-size:17px;font-weight:700;color:#fff;font-family:inherit;
+    background:linear-gradient(135deg,var(--accent),var(--accent-2));
+    box-shadow:0 16px 40px rgba(79,140,255,.4);
+    transition:transform .18s ease, box-shadow .25s, filter .2s}
+  #go:hover{transform:translateY(-2px);box-shadow:0 22px 50px rgba(79,140,255,.55);filter:brightness(1.06)}
+  #go:active{transform:translateY(0) scale(.99)}
+
+  .loader{width:54px;height:54px;margin:0 auto 18px;position:relative;display:none}
+  .loader.on{display:block}
+  .loader i{position:absolute;inset:0;border-radius:50%;
+    border:3px solid rgba(255,255,255,.09);border-top-color:var(--accent);
+    animation:spin 1s linear infinite}
+  .loader i:nth-child(2){inset:10px;border-top-color:var(--accent-2);animation-duration:1.5s;animation-direction:reverse}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .progress{height:4px;margin:22px auto 0;max-width:340px;border-radius:99px;overflow:hidden;
+    background:rgba(255,255,255,.08);display:none}
+  .progress.on{display:block}
+  .progress span{display:block;height:100%;width:38%;border-radius:99px;
+    background:linear-gradient(90deg,transparent,var(--accent),var(--accent-2),transparent);
+    animation:slide 1.4s ease-in-out infinite}
+  @keyframes slide{0%{transform:translateX(-120%)}100%{transform:translateX(320%)}}
+
+  #hint{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:30;
+    font-size:13px;color:rgba(159,176,201,.55);pointer-events:none;transition:opacity .4s}
+  body:hover #hint{opacity:0}
+
+  .badge{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:99px;
+    font-size:13px;color:var(--muted);background:rgba(255,255,255,.05);
+    border:1px solid var(--stroke-soft);margin-bottom:18px}
+  @media (max-width:640px){
+    h1{font-size:22px} #msg{font-size:15px} #bar{gap:8px;padding:8px 12px;font-size:14px}
+    .btn{font-size:14px;padding:7px 10px} #status{max-width:38vw}
+  }
+</style>
+</head>
+<body>
+<div class="bg"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span><div class="grain"></div></div>
+
+<div id="stage"><div id="screen"></div></div>
+
+<header id="bar">
+  <span id="dot"></span>
+  <span id="status">آماده</span>
+  <span class="sep"></span>
+  <button class="btn" id="fs">⛶ تمام‌صفحه</button>
+  <button class="btn" id="cad">⌨ Ctrl+Alt+Del</button>
+  <button class="btn" id="rc">↻ اتصال مجدد</button>
+</header>
+
+<div id="overlay">
+  <div class="panel">
+    <div class="logo">VNC</div>
+    <div class="badge"><span id="bdot">●</span><span id="bsub">اتصال امن از طریق Cloudflare</span></div>
+    <h1 id="ttl">در حال اتصال…</h1>
+    <p id="msg">دسکتاپ را آماده می‌کنیم؛ چند لحظه صبر کنید.</p>
+    <div class="loader" id="load"><i></i><i></i></div>
+    <div class="field" id="field" style="display:none"><input id="pw" type="password" inputmode="latin" autocomplete="off" placeholder="رمز ورود را وارد کنید"></div>
+    <button id="go" style="display:none">ورود به دسکتاپ</button>
+    <div class="progress" id="prog"><span></span></div>
+  </div>
+</div>
+
+<div id="hint">برای دیدن نوار ابزار، نشانگر را بالای صفحه ببرید</div>
+
+<script type="module">
+import RFB from './core/rfb.js';
+
+const qs = new URLSearchParams(location.search);
+const wsPath = qs.get('path') || 'websockify';
+let password = qs.get('password') || '';
+const wsUrl = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/' + wsPath;
+
+const el = (id) => document.getElementById(id);
+const stage = el('stage'), screenEl = el('screen'), overlay = el('overlay');
+const ttl = el('ttl'), msg = el('msg'), load = el('load'), prog = el('prog');
+const field = el('field'), pw = el('pw'), go = el('go');
+const dot = el('dot'), statusEl = el('status'), stageEl = el('stage');
+
+let rfb = null, attempt = 0, stopped = false;
+let flashTimer = null;
+
+function flashBar(ms = 3200) {
+  document.body.classList.add('pinned');
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => document.body.classList.remove('pinned'), ms);
+}
+
+function setStatus(text, tone) {
+  statusEl.textContent = text;
+  dot.className = tone || '';
+}
+
+function showPanel(title, text, opts = {}) {
+  ttl.textContent = title;
+  msg.textContent = text;
+  load.classList.toggle('on', !!opts.spinner);
+  prog.classList.toggle('on', !!opts.spinner);
+  field.style.display = opts.password ? 'block' : 'none';
+  go.style.display = opts.button ? 'block' : 'none';
+  go.textContent = opts.button || 'ورود به دسکتاپ';
+  overlay.classList.add('show');
+  if (opts.password) setTimeout(() => pw.focus(), 260);
+}
+
+function hidePanel() {
+  overlay.classList.remove('show');
+}
+
+function connect() {
+  stopped = false;
+  setStatus('در حال اتصال…', 'warn');
+  showPanel('در حال اتصال…', 'دسکتاپ را آماده می‌کنیم؛ چند لحظه صبر کنید.', { spinner: true });
+  try {
+    rfb = new RFB(screenEl, wsUrl, { credentials: password ? { password } : {} });
+  } catch (err) {
+    showPanel('اتصال ممکن نشد', String(err), { button: 'تلاش دوباره' });
+    return;
+  }
+  rfb.scaleViewport = true;        // fit the remote desktop to this window
+  rfb.clipViewport = false;
+  rfb.showDotCursor = true;
+  rfb.background = '#070b14';
+  rfb.qualityLevel = 7;
+  rfb.compressionLevel = 3;
+
+  rfb.addEventListener('connect', () => {
+    attempt = 0;
+    hidePanel();
+    stageEl.classList.add('ready');
+    setStatus('متصل — کنترل فعال است', 'ok');
+    flashBar();
+  });
+  rfb.addEventListener('desktopname', (e) => setStatus(e.detail.name + ' — متصل', 'ok'));
+  rfb.addEventListener('credentialsrequired', () => {
+    setStatus('نیاز به رمز', 'warn');
+    showPanel('رمز ورود لازم است', 'رمزی که در برنامهٔ VNC Link تعیین شده را وارد کنید.',
+              { password: true, button: 'ورود به دسکتاپ' });
+  });
+  rfb.addEventListener('securityfailure', (e) => {
+    setStatus('ورود ناموفق', 'bad');
+    showPanel('ورود ناموفق', (e.detail && e.detail.reason) || 'رمز عبور اشتباه است.',
+              { password: true, button: 'تلاش دوباره' });
+  });
+  rfb.addEventListener('disconnect', (e) => {
+    if (stopped) { setStatus('قطع شد', ''); return; }
+    const clean = e.detail && e.detail.clean;
+    setStatus('قطع شد — تلاش مجدد…', 'bad');
+    stageEl.classList.remove('ready');
+    attempt += 1;
+    const wait = Math.min(8000, 900 * attempt);
+    showPanel('اتصال قطع شد', 'تلاش مجدد تا ' + Math.round(wait / 1000) + ' ثانیهٔ دیگر…',
+              { spinner: true });
+    setTimeout(() => { if (!stopped) connect(); }, wait);
+  });
+}
+
+go.addEventListener('click', () => {
+  const value = pw.value.trim();
+  if (!value) { pw.focus(); return; }
+  password = value;
+  if (rfb) { rfb.sendCredentials({ password }); pw.value = ''; }
+  else { connect(); }
+  hidePanel();
+});
+pw.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') go.click(); });
+
+el('fs').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(() => {});
+});
+el('cad').addEventListener('click', () => { if (rfb) rfb.sendCtrlAltDel(); });
+el('rc').addEventListener('click', () => {
+  if (rfb) { stopped = true; try { rfb.disconnect(); } catch (e) {} }
+  setTimeout(() => { screenEl.innerHTML = ''; stageEl.classList.remove('ready'); connect(); }, 180);
+});
+
+document.addEventListener('fullscreenchange', () => {
+  document.body.classList.toggle('pinned', !!document.fullscreenElement);
+});
+
+connect();
+</script>
+</body>
+</html>

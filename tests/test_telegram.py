@@ -108,6 +108,24 @@ def main():
         loaded = settings.load_settings()
         check("settings round-trip", all(loaded[k] == v for k, v in payload.items()), str(loaded))
         settings.settings_path = orig
+
+        # ---- link history ----
+        import history
+        orig_store = history.store_path
+        history.store_path = lambda: os.path.join(tmp, "links.json")
+        history.clear()
+        items = history.add("https://a.trycloudflare.com/", "Abc12345")
+        check("history.add stores the link", len(items) == 1 and items[0]["state"] == "active")
+        items = history.add("https://b.trycloudflare.com/", "")
+        check("new link becomes the active one",
+              items[0]["url"].startswith("https://b") and items[0]["state"] == "active")
+        check("previous link is marked closed", items[1]["state"] == "closed")
+        check("password-less link is stored", items[0]["password"] == "")
+        history.close_active()
+        check("close_active closes everything", all(i["state"] == "closed" for i in history.load()))
+        history.clear()
+        check("history.clear empties the file", history.load() == [])
+        history.store_path = orig_store
     finally:
         srv.shutdown()
 
