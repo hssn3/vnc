@@ -1,0 +1,3 @@
+websockify>=0.13
+cryptography>=42
+pyinstaller>=6
